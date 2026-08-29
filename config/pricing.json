@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-07-20",
+  "updatedAt": "2026-07-30",
   "currency": "USD",
   "models": [
     {
@@ -16,7 +16,15 @@
       "inputPerMillion": 2.5,
       "cachedInputPerMillion": 0.25,
       "outputPerMillion": 15,
-      "longContext": { "thresholdTokens": 272000, "inputMultiplier": 2, "outputMultiplier": 1.5 }
+      "longContext": { "thresholdTokens": 272000, "inputMultiplier": 2, "outputMultiplier": 1.5 },
+      "priceChanges": [
+        {
+          "effectiveFrom": "2026-07-31T00:00:00Z",
+          "inputPerMillion": 2,
+          "cachedInputPerMillion": 0.2,
+          "outputPerMillion": 12
+        }
+      ]
     },
     {
       "id": "gpt-5.6-luna",
@@ -24,7 +32,15 @@
       "inputPerMillion": 1,
       "cachedInputPerMillion": 0.1,
       "outputPerMillion": 6,
-      "longContext": { "thresholdTokens": 272000, "inputMultiplier": 2, "outputMultiplier": 1.5 }
+      "longContext": { "thresholdTokens": 272000, "inputMultiplier": 2, "outputMultiplier": 1.5 },
+      "priceChanges": [
+        {
+          "effectiveFrom": "2026-07-31T00:00:00Z",
+          "inputPerMillion": 0.2,
+          "cachedInputPerMillion": 0.02,
+          "outputPerMillion": 1.2
+        }
+      ]
     },
     {
       "id": "gpt-5.5",

@@ -19,6 +19,7 @@ export interface ProjectionPoint {
   timestamp: number;
   usedPercent: number;
   projected?: boolean;
+  reset?: boolean;
 }
 
 export interface LimitProjection {
@@ -27,6 +28,8 @@ export interface LimitProjection {
   percentPerHour: number | null;
   paceRatio: number | null;
   confidence: 'low' | 'medium' | 'high' | 'unavailable';
+  samplesUsed: number;
+  resetEventsDetected: number;
 }
 
 export interface DailyUsage {
@@ -91,6 +94,7 @@ export interface ThreadSummary extends TokenUsage {
   estimatedFiveHourUsagePercent: number | null;
   estimatedSevenDayUsagePercent: number | null;
   usageSampleIntervals: number;
+  usageResetSegments: number;
 }
 
 export interface ModelEfficiency {

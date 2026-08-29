@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { cleanDisplayText } from './messageText.js';
 import type {
   DailyUsage,
   ModelEfficiency,
@@ -18,6 +19,7 @@ import type {
 const dataDir = path.resolve(process.cwd(), 'data');
 fs.mkdirSync(dataDir, { recursive: true });
 const db = new DatabaseSync(path.join(dataDir, 'codex-usage.sqlite'));
+db.exec('PRAGMA busy_timeout = 5000;');
 db.exec('PRAGMA journal_mode = WAL;');
 db.exec('PRAGMA foreign_keys = ON;');
 
@@ -499,6 +501,7 @@ function buildThreadSummaries(): ThreadSummary[] {
         estimatedFiveHourUsagePercent: null,
         estimatedSevenDayUsagePercent: null,
         usageSampleIntervals: 0,
+        usageResetSegments: 0,
         hasPriced: false,
         hasUnpriced: false
       };
@@ -558,11 +561,13 @@ function buildThreadSummaries(): ThreadSummary[] {
     thread.prompts = promptMap.get(thread.threadId) ?? [];
 
     const storedMetadata = metadata.get(thread.threadId);
-    if (storedMetadata?.displayName) {
-      thread.title = storedMetadata.displayName;
+    const displayName = cleanDisplayText(storedMetadata?.displayName ?? null);
+    const preview = cleanDisplayText(storedMetadata?.preview ?? null);
+    if (displayName) {
+      thread.title = displayName;
       thread.titleSource = 'codex-name';
-    } else if (storedMetadata?.preview) {
-      thread.title = storedMetadata.preview;
+    } else if (preview) {
+      thread.title = preview;
       thread.titleSource = 'codex-preview';
     }
   }
@@ -644,6 +649,60 @@ export function getThreadTokenEvents(since: number): Array<{
     WHERE observed_at >= ?
     ORDER BY observed_at ASC
   `).all(since));
+}
+
+export function getThreadTaskRuns(since: number): Array<{
+  threadId: string;
+  startedAt: number;
+  completedAt: number;
+}> {
+  return rows<{
+    threadId: string;
+    startedAt: number;
+    completedAt: number;
+  }>(db.prepare(`
+    SELECT thread_id AS threadId, started_at AS startedAt, completed_at AS completedAt
+    FROM prompt_metrics
+    WHERE completed_at IS NOT NULL AND completed_at >= ?
+    ORDER BY started_at ASC
+  `).all(since));
+}
+
+export function getRecentChatTaskRuns(chatLimit: number): Array<{
+  promptId: string;
+  threadId: string;
+  startedAt: number;
+  completedAt: number;
+  model: string;
+  totalTokens: number;
+  estimatedApiCostUsd: number;
+}> {
+  return rows<{
+    promptId: string;
+    threadId: string;
+    startedAt: number;
+    completedAt: number;
+    model: string;
+    totalTokens: number;
+    estimatedApiCostUsd: number;
+  }>(db.prepare(`
+    WITH recent_threads AS (
+      SELECT thread_id
+      FROM prompt_metrics
+      WHERE completed_at IS NOT NULL
+      GROUP BY thread_id
+      ORDER BY MAX(completed_at) DESC
+      LIMIT ?
+    )
+    SELECT p.prompt_id AS promptId, p.thread_id AS threadId,
+           p.started_at AS startedAt, p.completed_at AS completedAt,
+           p.primary_model AS model, p.total_tokens AS totalTokens,
+           COALESCE(p.estimated_cost_usd, 0) AS estimatedApiCostUsd
+    FROM prompt_metrics p
+    JOIN recent_threads r ON r.thread_id = p.thread_id
+    WHERE p.completed_at IS NOT NULL
+    ORDER BY p.started_at ASC
+  `).all(chatLimit));
 }
 
 export function getModelTokenEvents(since: number): Array<{

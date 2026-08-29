@@ -78,7 +78,8 @@ const threads: ThreadSummary[] = [
     prompts: threadOnePrompts,
     estimatedFiveHourUsagePercent: 9.8,
     estimatedSevenDayUsagePercent: 3.4,
-    usageSampleIntervals: 12
+    usageSampleIntervals: 12,
+    usageResetSegments: 1
   },
   {
     threadId: 'demo-2',
@@ -103,7 +104,8 @@ const threads: ThreadSummary[] = [
     prompts: threadTwoPrompts,
     estimatedFiveHourUsagePercent: null,
     estimatedSevenDayUsagePercent: 1.7,
-    usageSampleIntervals: 6
+    usageSampleIntervals: 6,
+    usageResetSegments: 1
   }
 ];
 
@@ -142,14 +144,18 @@ export function demoOverview(): DashboardOverview {
         projectedExhaustionAt: null,
         percentPerHour: 9.3,
         paceRatio: 0.53,
-        confidence: 'high'
+        confidence: 'high',
+        samplesUsed: 15,
+        resetEventsDetected: 0
       },
       sevenDay: {
         projectedPercentAtReset: 58,
         projectedExhaustionAt: null,
         percentPerHour: 0.16,
         paceRatio: 0.38,
-        confidence: 'medium'
+        confidence: 'medium',
+        samplesUsed: 13,
+        resetEventsDetected: 0
       }
     },
     histories: { fiveHour: fiveHistory, sevenDay: sevenHistory },

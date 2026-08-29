@@ -76,7 +76,9 @@ export function normalizeRateLimits(payload: unknown): RateLimitWindow[] {
     deduped.set(key, {
       key: classification,
       label: labelFor(duration, candidate.label),
-      usedPercent: Math.max(0, Math.min(100, used)),
+      // Codex may report usage beyond the nominal limit. Preserve that value so
+      // the UI and estimators can distinguish 100% from an actual overage.
+      usedPercent: Math.max(0, used),
       windowDurationMins: duration,
       resetsAt: Math.round(reset),
       observedAt

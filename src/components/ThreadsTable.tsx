@@ -1,4 +1,4 @@
-import { Fragment, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   ChevronDown,
   ChevronRight,
@@ -7,11 +7,16 @@ import {
   FolderOpen,
   Gauge,
   MessageSquareText,
+  Search,
   ShieldCheck,
+  SlidersHorizontal,
   TimerReset,
   Zap
 } from 'lucide-react';
 import type { PromptMetric, ThreadSummary } from '../types';
+
+type ThreadFilter = 'all' | 'over-limit';
+type ThreadSort = 'recent' | 'usage' | 'tokens' | 'cost';
 
 function compact(value: number): string {
   return new Intl.NumberFormat('en-US', {
@@ -39,8 +44,7 @@ function formatDuration(milliseconds: number | null): string {
   const remaining = Math.round(seconds % 60);
   if (minutes < 60) return remaining > 0 ? `${minutes}m ${remaining}s` : `${minutes}m`;
   const hours = Math.floor(minutes / 60);
-  const restMinutes = minutes % 60;
-  return `${hours}h ${restMinutes}m`;
+  return `${hours}h ${minutes % 60}m`;
 }
 
 function formatUsage(value: number | null): string {
@@ -54,23 +58,43 @@ function average(values: Array<number | null>): number | null {
   return valid.length > 0 ? valid.reduce((sum, value) => sum + value, 0) / valid.length : null;
 }
 
-function TokenDistribution({ input, cached, output }: { input: number; cached: number; output: number }) {
+function projectName(path: string | null): string {
+  if (!path) return 'Unknown project';
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts.at(-1) ?? path;
+}
+
+function primaryUsage(thread: ThreadSummary): number | null {
+  return thread.estimatedSevenDayUsagePercent ?? thread.estimatedFiveHourUsagePercent;
+}
+
+function estimateNote(usage: number | null, windowLabel: string): string {
+  if (usage === null) return `${windowLabel} · Awaiting bracket`;
+  return `${windowLabel} · Timestamp estimate`;
+}
+
+function TokenDistribution({
+  input,
+  cached,
+  output
+}: {
+  input: number;
+  cached: number;
+  output: number;
+}) {
   const uncached = Math.max(0, input - cached);
   const denominator = Math.max(1, uncached + cached + output);
   const rows = [
-    { label: 'Cached input', value: cached, className: 'cached' },
-    { label: 'Uncached input', value: uncached, className: 'uncached' },
+    { label: 'Cached', value: cached, className: 'cached' },
+    { label: 'Uncached', value: uncached, className: 'uncached' },
     { label: 'Output', value: output, className: 'output' }
   ];
 
   return (
     <div className="distribution-block">
-      <div className="distribution-heading">
-        <div>
-          <span>Token distribution</span>
-          <strong>{compact(input + output)} billable text tokens</strong>
-        </div>
-        <small>Cached input is part of total input, not an additional token category.</small>
+      <div className="detail-block-heading">
+        <span>Token distribution</span>
+        <strong>{compact(input + output)} billable</strong>
       </div>
       <div className="distribution-track" aria-label="Token distribution">
         {rows.map((row) => (
@@ -85,7 +109,7 @@ function TokenDistribution({ input, cached, output }: { input: number; cached: n
       <div className="distribution-legend">
         {rows.map((row) => (
           <div key={row.label}>
-            <span className={`legend-dot ${row.className}`} />
+            <i className={`legend-dot ${row.className}`} />
             <span>{row.label}</span>
             <strong>{compact(row.value)}</strong>
             <small>{((row.value / denominator) * 100).toFixed(1)}%</small>
@@ -99,18 +123,16 @@ function TokenDistribution({ input, cached, output }: { input: number; cached: n
 function PromptRow({ prompt }: { prompt: PromptMetric }) {
   return (
     <article className="prompt-row">
-      <div className="prompt-index">{prompt.sequence}</div>
+      <span className="prompt-index">{prompt.sequence}</span>
       <div className="prompt-copy">
         <strong title={prompt.prompt}>{prompt.prompt}</strong>
         <span>{formatTime(prompt.startedAt)}</span>
       </div>
-      <div className="prompt-model">
-        <span className="model-label">{prompt.primaryModel}</span>
-      </div>
+      <span className="model-label">{prompt.primaryModel}</span>
       <div className="prompt-metric">
         <span>Active span</span>
         <strong>{formatDuration(prompt.durationMs)}</strong>
-        {prompt.timingEstimated && <small>derived</small>}
+        {prompt.timingEstimated ? <small>derived</small> : null}
       </div>
       <div className="prompt-metric">
         <span>First token</span>
@@ -119,7 +141,6 @@ function PromptRow({ prompt }: { prompt: PromptMetric }) {
       <div className="prompt-metric">
         <span>Tokens</span>
         <strong>{compact(prompt.totalTokens)}</strong>
-        <small>{compact(prompt.cachedInputTokens)} cached</small>
       </div>
       <div className="prompt-metric">
         <span>API equivalent</span>
@@ -139,75 +160,71 @@ function ExpandedThread({ thread }: { thread: ThreadSummary }) {
     ? (thread.cachedInputTokens / thread.inputTokens) * 100
     : 0;
 
-  return (
-    <div className="thread-detail">
-      <div className="thread-detail-stats">
-        <div>
-          <MessageSquareText size={15} />
-          <span>Prompts</span>
-          <strong>{thread.prompts.length}</strong>
-        </div>
-        <div>
-          <Clock3 size={15} />
-          <span>Measured active span</span>
-          <strong>{formatDuration(totalPromptMs || null)}</strong>
-        </div>
-        <div>
-          <Zap size={15} />
-          <span>Average first token</span>
-          <strong>{formatDuration(averageTtft)}</strong>
-        </div>
-        <div>
-          <Gauge size={15} />
-          <span>Tokens per minute</span>
-          <strong>{tokensPerMinute === null ? '—' : compact(tokensPerMinute)}</strong>
-        </div>
-        <div>
-          <TimerReset size={15} />
-          <span>Input cache hit</span>
-          <strong>{cacheHit.toFixed(1)}%</strong>
-        </div>
-        <div>
-          <ShieldCheck size={15} />
-          <span>Review overhead</span>
-          <strong>{compact(thread.reviewerTokens)}</strong>
-        </div>
-      </div>
+  const metrics = [
+    { label: 'Prompts', value: thread.prompts.length.toString(), Icon: MessageSquareText },
+    { label: 'Measured span', value: formatDuration(totalPromptMs || null), Icon: Clock3 },
+    { label: 'First token', value: formatDuration(averageTtft), Icon: Zap },
+    { label: 'Tokens / min', value: tokensPerMinute === null ? '—' : compact(tokensPerMinute), Icon: Gauge },
+    { label: 'Cache hit', value: `${cacheHit.toFixed(1)}%`, Icon: TimerReset },
+    { label: 'Review overhead', value: compact(thread.reviewerTokens), Icon: ShieldCheck }
+  ];
 
-      <div className="thread-detail-grid">
+  return (
+    <div className="chat-detail">
+      <div className="chat-detail-top">
         <TokenDistribution
           input={thread.inputTokens}
           cached={thread.cachedInputTokens}
           output={thread.outputTokens}
         />
-        <div className="usage-detail-card">
-          <div>
-            <span>Estimated 5-hour bank usage</span>
-            <strong>{formatUsage(thread.estimatedFiveHourUsagePercent)}</strong>
+        <div className="detail-metrics">
+          <div className="detail-block-heading">
+            <span>Prompt-level timing</span>
+            <strong>{thread.prompts.length} segments</strong>
           </div>
-          <div>
-            <span>Estimated 7-day bank usage</span>
-            <strong>{formatUsage(thread.estimatedSevenDayUsagePercent)}</strong>
+          <div className="detail-metric-grid">
+            {metrics.map(({ label, value, Icon }) => (
+              <div key={label}>
+                <Icon size={14} />
+                <span>{label}</span>
+                <strong>{value}</strong>
+              </div>
+            ))}
           </div>
-          <div>
-            <span>Quota-change samples</span>
-            <strong>{thread.usageSampleIntervals}</strong>
-          </div>
-          <div>
-            <span>Session files combined</span>
-            <strong>{thread.partCount}</strong>
-          </div>
-          <p>
-            Usage is the quota difference between the snapshot before the thread and the first reported change after its final token event. Overlapping threads share the change by cost or tokens.
-          </p>
         </div>
+      </div>
+
+      <div className="estimate-strip">
+        <div>
+          <span>5-hour estimate</span>
+          <strong>{formatUsage(thread.estimatedFiveHourUsagePercent)}</strong>
+        </div>
+        <div>
+          <span>7-day estimate</span>
+          <strong>{formatUsage(thread.estimatedSevenDayUsagePercent)}</strong>
+        </div>
+        <div>
+          <span>Reliable intervals</span>
+          <strong>{thread.usageSampleIntervals}</strong>
+        </div>
+        <div>
+          <span>Reset segments</span>
+          <strong>{thread.usageResetSegments || '—'}</strong>
+        </div>
+        <div>
+          <span>Session files</span>
+          <strong>{thread.partCount}</strong>
+        </div>
+        <p>
+          Completed task runs are matched to quota timestamps. Each impact is the after value minus the before value.
+        </p>
       </div>
 
       <div className="prompt-section">
         <div className="prompt-section-heading">
           <div>
             <span>Prompt activity</span>
-            <strong>Timing and token use for each user prompt or steering message</strong>
+            <strong>Timing and token use for each prompt or steering message</strong>
           </div>
         </div>
         {thread.prompts.length === 0 ? (
@@ -223,7 +240,37 @@ function ExpandedThread({ thread }: { thread: ThreadSummary }) {
 }
 
 export function ThreadsTable({ threads }: { threads: ThreadSummary[] }) {
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(
+    () => new Set(threads[0] ? [threads[0].threadId] : [])
+  );
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<ThreadFilter>('all');
+  const [sort, setSort] = useState<ThreadSort>('recent');
+
+  const visibleThreads = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    const filtered = threads.filter((thread) => {
+      const matchesQuery = !normalizedQuery || [
+        thread.title,
+        thread.projectPath ?? '',
+        projectName(thread.projectPath),
+        thread.primaryModel
+      ].some((value) => value.toLowerCase().includes(normalizedQuery));
+      if (!matchesQuery) return false;
+      if (filter === 'over-limit') {
+        return (thread.estimatedFiveHourUsagePercent ?? 0) > 100 ||
+          (thread.estimatedSevenDayUsagePercent ?? 0) > 100;
+      }
+      return true;
+    });
+
+    return [...filtered].sort((a, b) => {
+      if (sort === 'usage') return (primaryUsage(b) ?? -1) - (primaryUsage(a) ?? -1);
+      if (sort === 'tokens') return b.totalTokens - a.totalTokens;
+      if (sort === 'cost') return (b.estimatedApiCostUsd ?? -1) - (a.estimatedApiCostUsd ?? -1);
+      return (b.updatedAt ?? b.startedAt ?? 0) - (a.updatedAt ?? a.startedAt ?? 0);
+    });
+  }, [filter, query, sort, threads]);
 
   const toggle = (threadId: string) => {
     setExpanded((current) => {
@@ -235,119 +282,135 @@ export function ThreadsTable({ threads }: { threads: ThreadSummary[] }) {
   };
 
   return (
-    <section className="panel threads-panel">
-      <div className="panel-heading">
+    <section className="threads-panel" id="chats" aria-labelledby="recent-chats-title">
+      <div className="threads-heading">
         <div>
-          <p className="eyebrow">Local history</p>
-          <h2>Threads</h2>
-          <p className="panel-subtitle">
-            Expand a thread for token distribution, per-bank quota estimates, and prompt-level timing.
-          </p>
+          <h2 id="recent-chats-title">Recent chats</h2>
+          <p>Real chat names, quota estimates, and prompt-level detail.</p>
+        </div>
+        <div className="thread-toolbar">
+          <label className="search-control">
+            <Search size={16} />
+            <span className="sr-only">Search chats or projects</span>
+            <input
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search chats or projects"
+            />
+          </label>
+          <div className="filter-control" aria-label="Filter chats">
+            {([
+              ['all', 'All'],
+              ['over-limit', 'Over limit']
+            ] as const).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={filter === value ? 'active' : ''}
+                aria-pressed={filter === value}
+                onClick={() => setFilter(value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <label className="sort-control">
+            <SlidersHorizontal size={15} />
+            <span className="sr-only">Sort chats</span>
+            <select value={sort} onChange={(event) => setSort(event.target.value as ThreadSort)}>
+              <option value="recent">Recent</option>
+              <option value="usage">Quota impact</option>
+              <option value="tokens">Tokens</option>
+              <option value="cost">API equivalent</option>
+            </select>
+          </label>
         </div>
       </div>
+
       {threads.length === 0 ? (
-        <div className="table-empty">No thread usage has been indexed.</div>
+        <div className="table-empty">No chat usage has been indexed.</div>
+      ) : visibleThreads.length === 0 ? (
+        <div className="table-empty">No chats match this search and filter.</div>
       ) : (
-        <div className="table-scroll">
-          <table className="threads-table">
-            <thead>
-              <tr>
-                <th aria-label="Expand thread" />
-                <th>Thread</th>
-                <th>Model</th>
-                <th>Estimated usage</th>
-                <th>Tokens</th>
-                <th>API equivalent</th>
-                <th>Last activity</th>
-              </tr>
-            </thead>
-            <tbody>
-              {threads.map((thread) => {
-                const isExpanded = expanded.has(thread.threadId);
-                const primaryUsage =
-                  thread.estimatedSevenDayUsagePercent ?? thread.estimatedFiveHourUsagePercent;
-                const primaryUsageLabel = thread.estimatedSevenDayUsagePercent !== null
-                  ? '7-day bank at last activity'
-                  : thread.estimatedFiveHourUsagePercent !== null
-                    ? '5-hour bank at last activity'
-                    : 'No reliable before/after samples';
-                return (
-                  <Fragment key={thread.threadId}>
-                    <tr className={isExpanded ? 'thread-summary-row expanded' : 'thread-summary-row'}>
-                      <td className="expand-cell">
-                        <button
-                          className="expand-button"
-                          type="button"
-                          aria-expanded={isExpanded}
-                          aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${thread.title}`}
-                          onClick={() => toggle(thread.threadId)}
-                        >
-                          {isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-                        </button>
-                      </td>
-                      <td>
-                        <button className="thread-title-button" type="button" onClick={() => toggle(thread.threadId)}>
-                          <span className="thread-title" title={thread.title}>{thread.title}</span>
-                        </button>
-                        <div className="thread-path" title={thread.projectPath ?? undefined}>
-                          <FolderOpen size={12} />
-                          {thread.projectPath ?? 'Project path unavailable'}
-                        </div>
-                        {thread.userMessageCount > 1 && (
-                          <span className="muted-inline">
-                            <MessageSquareText size={12} /> {thread.userMessageCount} prompts in thread
-                          </span>
-                        )}
-                      </td>
-                      <td>
-                        <span className="model-label">{thread.primaryModel}</span>
-                        {thread.reviewerTokens > 0 && (
-                          <span className="muted-inline">
-                            <ShieldCheck size={12} /> auto-review included
-                          </span>
-                        )}
-                      </td>
-                      <td className="numeric-cell">
-                        {formatUsage(primaryUsage)}
-                        <span className="sub-value">{primaryUsageLabel}</span>
-                        {thread.estimatedFiveHourUsagePercent !== null &&
-                          thread.estimatedSevenDayUsagePercent !== null && (
-                            <span className="sub-value">
-                              {formatUsage(thread.estimatedFiveHourUsagePercent)} in 5-hour bank
-                            </span>
-                          )}
-                      </td>
-                      <td className="numeric-cell">
-                        {compact(thread.totalTokens)}
-                        <span className="sub-value">
-                          {compact(thread.inputTokens)} in · {compact(thread.outputTokens)} out
-                        </span>
-                      </td>
-                      <td className="numeric-cell">
-                        {thread.estimatedApiCostUsd === null
-                          ? 'Unknown'
-                          : `$${thread.estimatedApiCostUsd.toFixed(2)}`}
-                        <span className={`pricing-state ${thread.pricingStatus}`}>
-                          <CircleDollarSign size={11} />
-                          {thread.pricingStatus === 'exact-model-match'
-                            ? 'Matched'
-                            : thread.pricingStatus === 'partial'
-                              ? 'Partial'
-                              : 'No price'}
-                        </span>
-                      </td>
-                      <td>{formatTime(thread.updatedAt)}</td>
-                    </tr>
-                    {isExpanded && (
-                      <tr className="thread-expanded-row">
-                        <td colSpan={7}><ExpandedThread thread={thread} /></td>
-                      </tr>
-                    )}
-                  </Fragment>
-                );
-              })}
-            </tbody>
-          </table>
+        <div className="chat-list">
+          <div className="chat-list-header" aria-hidden="true">
+            <span />
+            <span>Chat</span>
+            <span>Project</span>
+            <span>Model</span>
+            <span>5h impact</span>
+            <span>7d impact</span>
+            <span>Tokens</span>
+            <span>API equivalent</span>
+            <span>Last activity</span>
+          </div>
+          {visibleThreads.map((thread) => {
+            const isExpanded = expanded.has(thread.threadId);
+            const fiveHourUsage = thread.estimatedFiveHourUsagePercent;
+            const sevenDayUsage = thread.estimatedSevenDayUsagePercent;
+            return (
+              <article
+                className={`chat-item ${isExpanded ? 'expanded' : ''}`}
+                key={thread.threadId}
+              >
+                <button
+                  type="button"
+                  className="chat-summary"
+                  aria-expanded={isExpanded}
+                  aria-controls={`detail-${thread.threadId}`}
+                  onClick={() => toggle(thread.threadId)}
+                >
+                  <span className="chat-chevron">
+                    {isExpanded ? <ChevronDown size={17} /> : <ChevronRight size={17} />}
+                  </span>
+                  <span className="chat-main">
+                    <span className="chat-title-line">
+                      <strong>{thread.title}</strong>
+                    </span>
+                    <span className="chat-mobile-meta">
+                      {projectName(thread.projectPath)} · {thread.primaryModel}
+                    </span>
+                  </span>
+                  <span className="chat-project" title={thread.projectPath ?? undefined}>
+                    <FolderOpen size={13} /> {projectName(thread.projectPath)}
+                  </span>
+                  <span className="chat-model"><i className="model-label">{thread.primaryModel}</i></span>
+                  <span className={`chat-usage chat-usage-five ${(fiveHourUsage ?? 0) > 100 ? 'over-limit' : ''}`}>
+                    <strong>{formatUsage(fiveHourUsage)}</strong>
+                    <small>{estimateNote(fiveHourUsage, '5h')}</small>
+                  </span>
+                  <span className={`chat-usage chat-usage-seven ${(sevenDayUsage ?? 0) > 100 ? 'over-limit' : ''}`}>
+                    <strong>{formatUsage(sevenDayUsage)}</strong>
+                    <small>{estimateNote(sevenDayUsage, '7d')}</small>
+                  </span>
+                  <span className="chat-tokens">
+                    <strong>{compact(thread.totalTokens)}</strong>
+                    <small>{compact(thread.outputTokens)} output</small>
+                  </span>
+                  <span className="chat-cost">
+                    <strong>
+                      {thread.estimatedApiCostUsd === null ? 'Unknown' : `$${thread.estimatedApiCostUsd.toFixed(2)}`}
+                    </strong>
+                    <small className={`pricing-state ${thread.pricingStatus}`}>
+                      <CircleDollarSign size={11} />
+                      {thread.pricingStatus === 'exact-model-match'
+                        ? 'Matched'
+                        : thread.pricingStatus === 'partial'
+                          ? 'Partial'
+                          : 'No price'}
+                    </small>
+                  </span>
+                  <span className="chat-activity">{formatTime(thread.updatedAt)}</span>
+                </button>
+                {isExpanded ? (
+                  <div id={`detail-${thread.threadId}`}>
+                    <ExpandedThread thread={thread} />
+                  </div>
+                ) : null}
+              </article>
+            );
+          })}
         </div>
       )}
     </section>

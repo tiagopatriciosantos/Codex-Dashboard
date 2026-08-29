@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { AppServerClient } from './codex/AppServerClient.js';
+import { readLocalThreadMetadata } from './codex/localThreadMetadata.js';
 import {
   normalizeAccount,
   normalizeDailyUsage,
@@ -48,6 +49,7 @@ let accountState: { authType: string | null; planType: string | null } = {
 };
 let connectionError: string | null = null;
 let refreshInProgress: Promise<void> | null = null;
+let sessionRefreshInProgress: Promise<void> | null = null;
 let lastAccountUsageRefresh = 0;
 let lastThreadMetadataRefresh = 0;
 
@@ -93,6 +95,8 @@ function pickWindow(duration: number): RateLimitWindow | null {
 }
 
 async function refreshThreadMetadata(): Promise<void> {
+  const localMetadata = readLocalThreadMetadata();
+  if (localMetadata.length > 0) upsertThreadMetadata(localMetadata);
   const collected: Array<{
     threadId: string;
     displayName: string | null;
@@ -129,6 +133,9 @@ async function refreshThreadMetadata(): Promise<void> {
   }
 
   if (collected.length > 0) upsertThreadMetadata(collected);
+  // The desktop state database contains the user-facing chat name. Apply it
+  // last so an App Server prompt preview can never replace the real name.
+  if (localMetadata.length > 0) upsertThreadMetadata(localMetadata);
   lastThreadMetadataRefresh = Date.now();
 }
 
@@ -183,10 +190,20 @@ async function refreshCodexData(forceAccountUsage = false): Promise<void> {
 
 async function refreshSessions(): Promise<void> {
   if (demoMode) return;
-  const result = await scanCodexSessions();
-  if (process.env.DEBUG_CODEX_DASHBOARD === 'true') {
-    console.log(`Session scan: ${result.scanned} found, ${result.updated} updated, ${result.errors} errors`);
-  }
+  if (sessionRefreshInProgress) return sessionRefreshInProgress;
+
+  sessionRefreshInProgress = (async () => {
+    const result = await scanCodexSessions();
+    const localMetadata = readLocalThreadMetadata();
+    if (localMetadata.length > 0) upsertThreadMetadata(localMetadata);
+    if (process.env.DEBUG_CODEX_DASHBOARD === 'true') {
+      console.log(`Session scan: ${result.scanned} found, ${result.updated} updated, ${result.errors} errors`);
+    }
+  })().finally(() => {
+    sessionRefreshInProgress = null;
+  });
+
+  return sessionRefreshInProgress;
 }
 
 function buildOverview(): DashboardOverview {
@@ -209,7 +226,8 @@ function buildOverview(): DashboardOverview {
       ...thread,
       estimatedFiveHourUsagePercent: usage?.fiveHourPercent ?? null,
       estimatedSevenDayUsagePercent: usage?.sevenDayPercent ?? null,
-      usageSampleIntervals: usage?.sampleIntervals ?? 0
+      usageSampleIntervals: usage?.sampleIntervals ?? 0,
+      usageResetSegments: usage?.resetSegments ?? 0
     };
   });
   const totals = getTokenTotals();
@@ -233,7 +251,10 @@ function buildOverview(): DashboardOverview {
   }
   if (connectionError) notices.push(`Codex account connection error: ${connectionError}`);
   notices.push(
-    'Thread quota usage is estimated only within the specific quota bank active at the thread’s latest token event. It stays blank unless every local token event in that bank is bracketed by consistent quota snapshots.'
+    'Thread quota usage is the timestamp-bracketed change across completed task runs. It stays blank unless every run in the selected quota bank has a sample at or before its start and at or after its completion.'
+  );
+  notices.push(
+    'Model efficiency uses the 30 most recently completed chats and reports actual task minutes per estimated 1% of quota.'
   );
   notices.push(
     'Prompt duration is exact when Codex reports a completed turn. Steering messages inside one turn use the time until the next prompt or turn completion.'

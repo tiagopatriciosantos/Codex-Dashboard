@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import {
   Area,
   Bar,
@@ -32,36 +33,66 @@ function timeLabel(timestamp: number, range: 'short' | 'long'): string {
     : date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
+const tooltipStyle = {
+  background: 'var(--tooltip-bg)',
+  border: '1px solid var(--border-strong)',
+  borderRadius: 10,
+  boxShadow: 'var(--shadow-lg)',
+  color: 'var(--text-primary)',
+  fontSize: 12
+};
+
+function ChartPanel({
+  title,
+  subtitle,
+  className = '',
+  children
+}: {
+  title: string;
+  subtitle: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className={`chart-panel ${className}`}>
+      <div className="section-heading compact-heading">
+        <div>
+          <h3>{title}</h3>
+          <p>{subtitle}</p>
+        </div>
+      </div>
+      {children}
+    </section>
+  );
+}
+
 type TrendRow = ProjectionPoint & {
   actual: number | null;
   projection: number | null;
+  overLimit: number | null;
 };
 
 function buildTrendData(points: ProjectionPoint[]): TrendRow[] {
   return points.map((point) => ({
     ...point,
     actual: point.projected ? null : point.usedPercent,
-    projection: point.projected ? point.usedPercent : null
+    projection: point.projected ? point.usedPercent : null,
+    overLimit: !point.projected && point.usedPercent > 100 ? point.usedPercent : null
   }));
 }
-
-const tooltipStyle = {
-  background: 'var(--tooltip-bg)',
-  border: '1px solid var(--border-strong)',
-  borderRadius: 12,
-  boxShadow: 'var(--shadow-lg)'
-};
 
 export function RateLimitChart({
   title,
   subtitle,
   points,
-  range
+  range,
+  resetAt
 }: {
   title: string;
   subtitle: string;
   points: ProjectionPoint[];
   range: 'short' | 'long';
+  resetAt: number | null;
 }) {
   const base = buildTrendData(points);
   const firstProjectedIndex = base.findIndex((point) => point.projected);
@@ -71,38 +102,39 @@ export function RateLimitChart({
     data[firstProjectedIndex - 1] = { ...previous, projection: previous.usedPercent };
   }
   const maxValue = Math.max(100, ...points.map((point) => point.usedPercent));
+  const maxTimestamp = Math.max(resetAt ?? 0, ...points.map((point) => point.timestamp));
+  const resetPoints = points.filter((point) => point.reset && !point.projected);
 
   return (
-    <section className="panel chart-panel">
-      <div className="panel-heading">
+    <section className="usage-chart-panel">
+      <div className="section-heading">
         <div>
-          <p className="eyebrow">Quota trend</p>
           <h2>{title}</h2>
-          <p className="panel-subtitle">{subtitle}</p>
+          <p>{subtitle}</p>
         </div>
       </div>
       {points.length < 2 ? (
         <div className="chart-empty">More snapshots are needed before a trend can be drawn.</div>
       ) : (
-        <div className="chart-frame">
+        <div className="chart-frame primary-chart">
           <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={data} margin={{ top: 8, right: 10, bottom: 0, left: -16 }}>
+            <ComposedChart data={data} margin={{ top: 22, right: 18, bottom: 0, left: -10 }}>
               <defs>
                 <linearGradient id={`usageFill-${range}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="var(--chart-primary)" stopOpacity={0.26} />
-                  <stop offset="100%" stopColor="var(--chart-primary)" stopOpacity={0.02} />
+                  <stop offset="0%" stopColor="var(--chart-primary)" stopOpacity={0.32} />
+                  <stop offset="100%" stopColor="var(--chart-primary)" stopOpacity={0.015} />
                 </linearGradient>
               </defs>
               <CartesianGrid stroke="var(--grid-line)" vertical={false} />
               <XAxis
                 dataKey="timestamp"
                 type="number"
-                domain={['dataMin', 'dataMax']}
+                domain={['dataMin', maxTimestamp]}
                 tickFormatter={(value) => timeLabel(value, range)}
                 tick={{ fill: 'var(--text-muted)', fontSize: 11 }}
                 axisLine={false}
                 tickLine={false}
-                minTickGap={34}
+                minTickGap={40}
               />
               <YAxis
                 domain={[0, Math.ceil(maxValue / 20) * 20]}
@@ -110,30 +142,65 @@ export function RateLimitChart({
                 tick={{ fill: 'var(--text-muted)', fontSize: 11 }}
                 axisLine={false}
                 tickLine={false}
+                width={44}
               />
               <Tooltip
                 contentStyle={tooltipStyle}
                 labelFormatter={(value) => new Date(Number(value) * 1000).toLocaleString()}
                 formatter={(value, name) => [
                   `${Number(value).toFixed(1)}%`,
-                  name === 'projection' ? 'Projected' : 'Actual'
+                  name === 'projection' ? 'Projected' : name === 'overLimit' ? 'Over limit' : 'Reported'
                 ]}
               />
-              <ReferenceLine y={100} stroke="var(--danger)" strokeDasharray="4 5" opacity={0.65} />
+              <ReferenceLine
+                y={100}
+                stroke="var(--danger)"
+                strokeDasharray="4 6"
+                opacity={0.72}
+                label={{ value: '100% limit', fill: 'var(--danger)', fontSize: 10, position: 'insideTopLeft' }}
+              />
+              {resetPoints.map((point) => (
+                <ReferenceLine
+                  key={`reset-${point.timestamp}`}
+                  x={point.timestamp}
+                  stroke="var(--info)"
+                  strokeDasharray="3 5"
+                  opacity={0.72}
+                  label={{ value: 'Reset detected', fill: 'var(--info)', fontSize: 10, position: 'insideTopRight' }}
+                />
+              ))}
+              {resetAt ? (
+                <ReferenceLine
+                  x={resetAt}
+                  stroke="var(--info)"
+                  strokeDasharray="4 4"
+                  opacity={0.88}
+                  label={{ value: 'Scheduled reset', fill: 'var(--info)', fontSize: 10, position: 'insideTopRight' }}
+                />
+              ) : null}
               <Area
                 type="linear"
                 dataKey="actual"
                 stroke="var(--chart-primary)"
-                strokeWidth={2.5}
+                strokeWidth={2.4}
                 fill={`url(#usageFill-${range})`}
                 connectNulls={false}
                 isAnimationActive={false}
               />
               <Line
                 type="linear"
+                dataKey="overLimit"
+                stroke="var(--danger)"
+                strokeWidth={2.8}
+                dot={false}
+                connectNulls
+                isAnimationActive={false}
+              />
+              <Line
+                type="linear"
                 dataKey="projection"
                 stroke="var(--chart-projection)"
-                strokeWidth={2.2}
+                strokeWidth={2.1}
                 strokeDasharray="6 5"
                 dot={false}
                 connectNulls
@@ -149,20 +216,16 @@ export function RateLimitChart({
 
 export function DailyTokenChart({ data }: { data: DailyUsage[] }) {
   return (
-    <section className="panel chart-panel daily-chart-panel">
-      <div className="panel-heading">
-        <div>
-          <p className="eyebrow">Token activity</p>
-          <h2>Last 7 days</h2>
-          <p className="panel-subtitle">Account totals when available, otherwise local session logs.</p>
-        </div>
-      </div>
+    <ChartPanel
+      title="Daily token activity"
+      subtitle="Account totals when available, otherwise local sessions."
+    >
       {data.length === 0 ? (
         <div className="chart-empty">No daily token history was returned yet.</div>
       ) : (
         <div className="chart-frame compact-chart">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: -14 }}>
+            <BarChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: -10 }}>
               <CartesianGrid stroke="var(--grid-line)" vertical={false} />
               <XAxis
                 dataKey="date"
@@ -178,52 +241,42 @@ export function DailyTokenChart({ data }: { data: DailyUsage[] }) {
                 tick={{ fill: 'var(--text-muted)', fontSize: 11 }}
                 axisLine={false}
                 tickLine={false}
+                width={48}
               />
               <Tooltip
-                cursor={{ fill: 'var(--hover-surface)' }}
                 contentStyle={tooltipStyle}
+                labelFormatter={(value) => new Date(`${value}T12:00:00`).toLocaleDateString()}
                 formatter={(value) => [Number(value).toLocaleString(), 'Tokens']}
               />
-              <Bar dataKey="tokens" fill="var(--chart-secondary)" radius={[6, 6, 2, 2]} />
+              <Bar dataKey="tokens" fill="var(--chart-primary)" radius={[5, 5, 1, 1]} maxBarSize={32} />
             </BarChart>
           </ResponsiveContainer>
         </div>
       )}
-    </section>
+    </ChartPanel>
   );
 }
 
 export function ModelEfficiencyChart({ data }: { data: ModelEfficiency[] }) {
-  const chartData = data.filter((row) => row.minutesPerPercent !== null).slice(0, 8);
-  const average = chartData.length > 0
-    ? chartData.reduce((sum, row) => sum + (row.minutesPerPercent ?? 0), 0) / chartData.length
-    : null;
-
+  const rows = data
+    .filter((row) => row.minutesPerPercent !== null)
+    .sort((a, b) => (b.minutesPerPercent ?? 0) - (a.minutesPerPercent ?? 0))
+    .slice(0, 7);
   return (
-    <section className="panel chart-panel efficiency-panel">
-      <div className="panel-heading">
-        <div>
-          <p className="eyebrow">Estimated model efficiency</p>
-          <h2>Minutes per 1% of quota</h2>
-          <p className="panel-subtitle">Higher means the model consumed the observed quota more slowly.</p>
-        </div>
-        {average !== null && (
-          <div className="average-box">
-            <span>Average</span>
-            <strong>{average.toFixed(1)} min</strong>
-          </div>
-        )}
-      </div>
-      {chartData.length === 0 ? (
-        <div className="chart-empty">Usage and token samples have not overlapped yet.</div>
+    <ChartPanel
+      title="Model efficiency"
+      subtitle="Last 30 chats · completed task minutes per 1% of quota. Higher is better."
+    >
+      {rows.length === 0 ? (
+        <div className="chart-empty">More correlated quota samples are needed.</div>
       ) : (
         <div className="chart-frame compact-chart">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={chartData} layout="vertical" margin={{ top: 4, right: 20, bottom: 0, left: 32 }}>
+            <BarChart data={rows} layout="vertical" margin={{ top: 4, right: 20, bottom: 0, left: 12 }}>
               <CartesianGrid stroke="var(--grid-line)" horizontal={false} />
               <XAxis
                 type="number"
-                unit="m"
+                tickFormatter={(value) => `${value}m`}
                 tick={{ fill: 'var(--text-muted)', fontSize: 11 }}
                 axisLine={false}
                 tickLine={false}
@@ -231,121 +284,100 @@ export function ModelEfficiencyChart({ data }: { data: ModelEfficiency[] }) {
               <YAxis
                 type="category"
                 dataKey="model"
-                width={112}
+                width={118}
                 tick={{ fill: 'var(--text-secondary)', fontSize: 11 }}
                 axisLine={false}
                 tickLine={false}
               />
               <Tooltip
-                cursor={{ fill: 'var(--hover-surface)' }}
                 contentStyle={tooltipStyle}
-                formatter={(value) => [`${Number(value).toFixed(2)} minutes`, 'Per 1%']}
+                formatter={(value) => [`${Number(value).toFixed(2)} min`, 'Minutes per 1%']}
               />
-              {average !== null && (
-                <ReferenceLine x={average} stroke="var(--chart-projection)" strokeDasharray="4 4" />
-              )}
-              <Bar dataKey="minutesPerPercent" fill="var(--chart-tertiary)" radius={[0, 6, 6, 0]} />
+              <Bar dataKey="minutesPerPercent" fill="var(--chart-secondary)" radius={[0, 5, 5, 0]} maxBarSize={18} />
             </BarChart>
           </ResponsiveContainer>
         </div>
       )}
-    </section>
+    </ChartPanel>
   );
 }
 
 export function ModelTokenChart({ data }: { data: ModelUsageSummary[] }) {
-  const chartData = [...data].sort((a, b) => b.totalTokens - a.totalTokens).slice(0, 10);
+  const rows = data.slice(0, 7).map((row) => ({
+    ...row,
+    cached: row.cachedInputTokens,
+    uncached: Math.max(0, row.inputTokens - row.cachedInputTokens),
+    output: row.outputTokens
+  }));
   return (
-    <section className="panel chart-panel model-breakdown-panel">
-      <div className="panel-heading">
-        <div>
-          <p className="eyebrow">Model totals</p>
-          <h2>Tokens by model</h2>
-          <p className="panel-subtitle">Includes main-agent, subagent, and auto-review token events.</p>
-        </div>
-      </div>
-      {chartData.length === 0 ? (
-        <div className="chart-empty">No model token data has been indexed.</div>
+    <ChartPanel title="Tokens by model" subtitle="Cached input, uncached input, and output text tokens.">
+      {rows.length === 0 ? (
+        <div className="chart-empty">No model token data is available.</div>
       ) : (
-        <div className="chart-frame model-chart">
+        <div className="chart-frame compact-chart">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={chartData} layout="vertical" margin={{ top: 4, right: 24, bottom: 0, left: 38 }}>
-              <CartesianGrid stroke="var(--grid-line)" horizontal={false} />
+            <BarChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: -4 }}>
+              <CartesianGrid stroke="var(--grid-line)" vertical={false} />
               <XAxis
-                type="number"
+                dataKey="model"
+                tick={{ fill: 'var(--text-muted)', fontSize: 10 }}
+                axisLine={false}
+                tickLine={false}
+                interval={0}
+              />
+              <YAxis
                 tickFormatter={compactNumber}
                 tick={{ fill: 'var(--text-muted)', fontSize: 11 }}
                 axisLine={false}
                 tickLine={false}
+                width={50}
               />
-              <YAxis
-                type="category"
-                dataKey="model"
-                width={130}
-                tick={{ fill: 'var(--text-secondary)', fontSize: 10 }}
-                axisLine={false}
-                tickLine={false}
-              />
-              <Tooltip
-                cursor={{ fill: 'var(--hover-surface)' }}
-                contentStyle={tooltipStyle}
-                formatter={(value) => [Number(value).toLocaleString(), 'Tokens']}
-              />
-              <Bar dataKey="totalTokens" fill="var(--chart-secondary)" radius={[0, 6, 6, 0]} />
+              <Tooltip contentStyle={tooltipStyle} formatter={(value, name) => [compactNumber(Number(value)), name]} />
+              <Bar dataKey="cached" stackId="tokens" fill="var(--chart-primary)" />
+              <Bar dataKey="uncached" stackId="tokens" fill="var(--chart-secondary)" />
+              <Bar dataKey="output" stackId="tokens" fill="var(--warning)" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
       )}
-    </section>
+    </ChartPanel>
   );
 }
 
 export function ModelCostChart({ data }: { data: ModelUsageSummary[] }) {
-  const chartData = data
-    .filter((row) => row.estimatedApiCostUsd > 0)
-    .sort((a, b) => b.estimatedApiCostUsd - a.estimatedApiCostUsd)
-    .slice(0, 10);
+  const rows = data.filter((row) => row.estimatedApiCostUsd > 0).slice(0, 7);
   return (
-    <section className="panel chart-panel model-breakdown-panel">
-      <div className="panel-heading">
-        <div>
-          <p className="eyebrow">API-equivalent pricing</p>
-          <h2>Estimated cost by model</h2>
-          <p className="panel-subtitle">Unpriced internal models are omitted from this graph.</p>
-        </div>
-      </div>
-      {chartData.length === 0 ? (
-        <div className="chart-empty">No model has a matched API price yet.</div>
+    <ChartPanel title="API equivalent by model" subtitle="Estimated public API price for observed text tokens.">
+      {rows.length === 0 ? (
+        <div className="chart-empty">No priced model usage is available.</div>
       ) : (
-        <div className="chart-frame model-chart">
+        <div className="chart-frame compact-chart">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={chartData} layout="vertical" margin={{ top: 4, right: 24, bottom: 0, left: 38 }}>
-              <CartesianGrid stroke="var(--grid-line)" horizontal={false} />
+            <BarChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: -4 }}>
+              <CartesianGrid stroke="var(--grid-line)" vertical={false} />
               <XAxis
-                type="number"
-                tickFormatter={(value) => `$${Number(value).toFixed(2)}`}
+                dataKey="model"
+                tick={{ fill: 'var(--text-muted)', fontSize: 10 }}
+                axisLine={false}
+                tickLine={false}
+                interval={0}
+              />
+              <YAxis
+                tickFormatter={(value) => `$${value}`}
                 tick={{ fill: 'var(--text-muted)', fontSize: 11 }}
                 axisLine={false}
                 tickLine={false}
-              />
-              <YAxis
-                type="category"
-                dataKey="model"
-                width={130}
-                tick={{ fill: 'var(--text-secondary)', fontSize: 10 }}
-                axisLine={false}
-                tickLine={false}
+                width={48}
               />
               <Tooltip
-                cursor={{ fill: 'var(--hover-surface)' }}
                 contentStyle={tooltipStyle}
-                formatter={(value) => [`$${Number(value).toFixed(4)}`, 'API equivalent']}
+                formatter={(value) => [`$${Number(value).toFixed(3)}`, 'API equivalent']}
               />
-              <Bar dataKey="estimatedApiCostUsd" fill="var(--chart-tertiary)" radius={[0, 6, 6, 0]} />
+              <Bar dataKey="estimatedApiCostUsd" fill="var(--info)" radius={[5, 5, 1, 1]} maxBarSize={34} />
             </BarChart>
           </ResponsiveContainer>
         </div>
       )}
-    </section>
+    </ChartPanel>
   );
 }

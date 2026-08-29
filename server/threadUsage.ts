@@ -1,58 +1,42 @@
 import type { RateLimitWindow } from './types.js';
 
-export interface ThreadUsageEvent {
-  observedAt: number;
+export interface ThreadTaskRun {
   threadId: string;
-  totalTokens: number;
-  estimatedApiCostUsd: number;
+  startedAt: number;
+  completedAt: number;
 }
 
 export interface ThreadUsageAccumulator {
   percent: number;
   sampleIntervals: number;
+  resetSegments: number;
 }
 
-interface ThreadBracket {
+interface TaskBracket {
   threadId: string;
   startIndex: number;
   endIndex: number;
-  events: ThreadUsageEvent[];
+  run: ThreadTaskRun;
 }
 
 interface BracketGroup {
   startIndex: number;
   endIndex: number;
-  brackets: ThreadBracket[];
+  brackets: TaskBracket[];
 }
 
-function findSnapshotBefore(history: RateLimitWindow[], timestamp: number): number {
+function findSnapshotAtOrBefore(history: RateLimitWindow[], timestamp: number): number {
   for (let index = history.length - 1; index >= 0; index -= 1) {
-    if (history[index].observedAt < timestamp) return index;
+    if (history[index].observedAt <= timestamp) return index;
   }
   return -1;
 }
 
-function findSnapshotAfter(history: RateLimitWindow[], timestamp: number): number {
-  return history.findIndex((point) => point.observedAt > timestamp);
+function findSnapshotAtOrAfter(history: RateLimitWindow[], timestamp: number): number {
+  return history.findIndex((point) => point.observedAt >= timestamp);
 }
 
-function extendToReportedChange(
-  history: RateLimitWindow[],
-  startIndex: number,
-  endIndex: number
-): number {
-  const startingPercent = history[startIndex].usedPercent;
-  let index = endIndex;
-  while (
-    index + 1 < history.length &&
-    Math.abs(history[index].usedPercent - startingPercent) <= 0.01
-  ) {
-    index += 1;
-  }
-  return index;
-}
-
-function mergeOverlappingBrackets(brackets: ThreadBracket[]): BracketGroup[] {
+function mergeOverlappingBrackets(brackets: TaskBracket[]): BracketGroup[] {
   const ordered = [...brackets].sort(
     (a, b) => a.startIndex - b.startIndex || a.endIndex - b.endIndex
   );
@@ -75,81 +59,133 @@ function mergeOverlappingBrackets(brackets: ThreadBracket[]): BracketGroup[] {
   return groups;
 }
 
-export function estimateThreadUsageForBank(
-  rawHistory: RateLimitWindow[],
-  bankEvents: ThreadUsageEvent[]
-): Map<string, ThreadUsageAccumulator> {
-  const history = [...rawHistory]
+function normalizeHistory(rawHistory: RateLimitWindow[]): RateLimitWindow[] {
+  const ordered = [...rawHistory]
     .sort((a, b) => a.observedAt - b.observedAt)
-    .filter((point, index, all) =>
-      index === 0 ||
-      point.observedAt !== all[index - 1].observedAt ||
-      point.usedPercent !== all[index - 1].usedPercent
-    );
-  if (history.length < 2 || bankEvents.length === 0) return new Map();
-
-  const eventsByThread = new Map<string, ThreadUsageEvent[]>();
-  for (const event of bankEvents) {
-    const events = eventsByThread.get(event.threadId) ?? [];
-    events.push(event);
-    eventsByThread.set(event.threadId, events);
+    .filter((point) => Number.isFinite(point.observedAt) && Number.isFinite(point.usedPercent));
+  const deduped: RateLimitWindow[] = [];
+  for (const point of ordered) {
+    const previous = deduped.at(-1);
+    if (previous?.observedAt === point.observedAt) deduped[deduped.length - 1] = point;
+    else deduped.push(point);
   }
+  return deduped;
+}
 
-  const brackets: ThreadBracket[] = [];
-  for (const [threadId, unsortedEvents] of eventsByThread) {
-    const events = [...unsortedEvents].sort((a, b) => a.observedAt - b.observedAt);
-    const startIndex = findSnapshotBefore(history, events[0].observedAt);
-    const firstAfterIndex = findSnapshotAfter(history, events.at(-1)!.observedAt);
-    if (startIndex < 0 || firstAfterIndex < 0) continue;
+function splitAtResets(history: RateLimitWindow[]): RateLimitWindow[][] {
+  const segments: RateLimitWindow[][] = [];
+  for (const point of history) {
+    const current = segments.at(-1);
+    const previous = current?.at(-1);
+    const resetBoundary = previous && (
+      point.resetsAt !== previous.resetsAt ||
+      point.usedPercent < previous.usedPercent - 0.01
+    );
+    if (!current || resetBoundary) segments.push([point]);
+    else current.push(point);
+  }
+  return segments;
+}
 
-    const endIndex = extendToReportedChange(history, startIndex, firstAfterIndex);
+function estimateContinuousSegment(
+  history: RateLimitWindow[],
+  taskRuns: ThreadTaskRun[]
+): Map<string, ThreadUsageAccumulator> {
+  if (history.length < 2 || taskRuns.length === 0) return new Map();
+
+  const brackets: TaskBracket[] = [];
+  for (const run of taskRuns) {
+    const startIndex = findSnapshotAtOrBefore(history, run.startedAt);
+    const endIndex = findSnapshotAtOrAfter(history, run.completedAt);
     if (endIndex <= startIndex) continue;
-    brackets.push({ threadId, startIndex, endIndex, events });
+    brackets.push({ threadId: run.threadId, startIndex, endIndex, run });
   }
 
   const result = new Map<string, ThreadUsageAccumulator>();
   for (const group of mergeOverlappingBrackets(brackets)) {
     let consistent = true;
-    let sampleIntervals = 0;
     for (let index = group.startIndex + 1; index <= group.endIndex; index += 1) {
       const delta = history[index].usedPercent - history[index - 1].usedPercent;
       if (delta < -0.01) {
         consistent = false;
         break;
       }
-      if (delta > 0.01) sampleIntervals += 1;
     }
     if (!consistent) continue;
 
     const deltaPercent =
       history[group.endIndex].usedPercent - history[group.startIndex].usedPercent;
-    if (deltaPercent <= 0.01) continue;
+    if (deltaPercent < -0.01) continue;
 
-    const totalsByThread = new Map<string, { tokens: number; cost: number }>();
+    const totalsByThread = new Map<string, { activeSeconds: number; runs: number }>();
     for (const bracket of group.brackets) {
-      const total = totalsByThread.get(bracket.threadId) ?? { tokens: 0, cost: 0 };
-      for (const event of bracket.events) {
-        total.tokens += event.totalTokens;
-        total.cost += event.estimatedApiCostUsd;
-      }
+      const total = totalsByThread.get(bracket.threadId) ?? { activeSeconds: 0, runs: 0 };
+      total.activeSeconds += Math.max(1, bracket.run.completedAt - bracket.run.startedAt);
+      total.runs += 1;
       totalsByThread.set(bracket.threadId, total);
     }
 
-    const totalCost = [...totalsByThread.values()].reduce((sum, row) => sum + row.cost, 0);
-    const totalTokens = [...totalsByThread.values()].reduce((sum, row) => sum + row.tokens, 0);
+    const totalActiveSeconds = [...totalsByThread.values()]
+      .reduce((sum, row) => sum + row.activeSeconds, 0);
     for (const [threadId, row] of totalsByThread) {
-      const weight = totalCost > 0
-        ? row.cost / totalCost
-        : totalTokens > 0
-          ? row.tokens / totalTokens
-          : 0;
+      const weight = totalActiveSeconds > 0 ? row.activeSeconds / totalActiveSeconds : 0;
       if (weight <= 0) continue;
-      result.set(threadId, {
+      const current = result.get(threadId);
+      result.set(threadId, current ? {
+        percent: current.percent + deltaPercent * weight,
+        sampleIntervals: current.sampleIntervals + row.runs,
+        resetSegments: 1
+      } : {
         percent: deltaPercent * weight,
-        sampleIntervals: Math.max(1, sampleIntervals)
+        sampleIntervals: row.runs,
+        resetSegments: 1
       });
     }
   }
 
   return result;
+}
+
+export function estimateThreadUsageForBank(
+  rawHistory: RateLimitWindow[],
+  taskRuns: ThreadTaskRun[]
+): Map<string, ThreadUsageAccumulator> {
+  const history = normalizeHistory(rawHistory);
+  if (history.length < 2 || taskRuns.length === 0) return new Map();
+
+  const combined = new Map<string, ThreadUsageAccumulator>();
+  const coveredRuns = new Map<string, Set<ThreadTaskRun>>();
+  for (const segment of splitAtResets(history)) {
+    if (segment.length < 2) continue;
+    const start = segment[0].observedAt;
+    const end = segment.at(-1)!.observedAt;
+    const segmentRuns = taskRuns.filter(
+      (run) => run.startedAt >= start && run.completedAt <= end
+    );
+    const estimates = estimateContinuousSegment(segment, segmentRuns);
+    for (const [threadId, estimate] of estimates) {
+      const covered = coveredRuns.get(threadId) ?? new Set<ThreadTaskRun>();
+      for (const run of segmentRuns) {
+        if (run.threadId === threadId) covered.add(run);
+      }
+      coveredRuns.set(threadId, covered);
+      const current = combined.get(threadId);
+      combined.set(threadId, current ? {
+        percent: current.percent + estimate.percent,
+        sampleIntervals: current.sampleIntervals + estimate.sampleIntervals,
+        resetSegments: current.resetSegments + 1
+      } : estimate);
+    }
+  }
+
+  // Never present a partial estimate as complete. A thread stays unavailable
+  // until every completed task run is enclosed by reliable timestamp samples.
+  for (const threadId of combined.keys()) {
+    const covered = coveredRuns.get(threadId);
+    const complete = taskRuns
+      .filter((run) => run.threadId === threadId)
+      .every((run) => covered?.has(run));
+    if (!complete) combined.delete(threadId);
+  }
+  return combined;
 }

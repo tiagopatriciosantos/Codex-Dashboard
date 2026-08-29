@@ -9,6 +9,7 @@ import {
   replaceThreadData,
   type StoredThreadEvent
 } from './db.js';
+import { cleanUserMessage, extractRawUserMessage } from './messageText.js';
 import { estimateUsageCost, findPricing } from './pricing.js';
 import type {
   PricingStatus,
@@ -159,32 +160,6 @@ function detectPartKind(record: JsonRecord): SessionPartKind | null {
   return 'main';
 }
 
-function extractRawUserMessage(record: JsonRecord): string | null {
-  const payload = isRecord(record.payload) ? record.payload : null;
-  if (!payload) return null;
-  if (record.type === 'event_msg' && payload.type === 'user_message') {
-    return typeof payload.message === 'string' ? payload.message : null;
-  }
-  return null;
-}
-
-function cleanUserMessage(message: string, maxLength = 1000): string | null {
-  let text = message.replace(/\r\n/g, '\n').trim();
-  const requestMarker = /##\s*My request for Codex:\s*/i.exec(text);
-  if (requestMarker) text = text.slice(requestMarker.index + requestMarker[0].length).trim();
-
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  if (!normalized) return null;
-  if (
-    /^the following is the codex agent history/i.test(normalized) ||
-    /^the following is the codex agent transcript/i.test(normalized) ||
-    /^continue the same review conversation/i.test(normalized)
-  ) {
-    return null;
-  }
-  return normalized.slice(0, maxLength);
-}
-
 function addUsage(target: TokenUsage, usage: TokenUsage): void {
   target.inputTokens += usage.inputTokens;
   target.cachedInputTokens += usage.cachedInputTokens;
@@ -276,7 +251,7 @@ interface ParsedSession {
   prompts: PromptMetric[];
 }
 
-async function parseSessionFile(sourceFile: string): Promise<ParsedSession | null> {
+export async function parseSessionFile(sourceFile: string): Promise<ParsedSession | null> {
   const stream = fs.createReadStream(sourceFile, { encoding: 'utf8' });
   const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
@@ -376,11 +351,11 @@ async function parseSessionFile(sourceFile: string): Promise<ParsedSession | nul
 
     const rawUserMessage = extractRawUserMessage(record);
     if (rawUserMessage) {
-      const dedupeKey = rawUserMessage.replace(/\s+/g, ' ').trim();
-      if (!seenUserMessages.has(dedupeKey)) {
-        seenUserMessages.add(dedupeKey);
-        const cleaned = cleanUserMessage(rawUserMessage);
-        if (cleaned && partKind === 'main') {
+      const cleaned = cleanUserMessage(rawUserMessage);
+      if (cleaned) {
+        const dedupeKey = cleaned.toLowerCase();
+        if (!seenUserMessages.has(dedupeKey) && partKind === 'main') {
+          seenUserMessages.add(dedupeKey);
           finalizePrompt(timestamp);
           userMessageCount += 1;
           promptSequence += 1;
@@ -424,7 +399,7 @@ async function parseSessionFile(sourceFile: string): Promise<ParsedSession | nul
     if (usage) {
       const observedAt = timestamp ?? updatedAt ?? Math.floor(Date.now() / 1000);
       for (const limit of extractRateLimitWindows(record, observedAt)) insertRateLimitSnapshot(limit);
-      const cost = estimateUsageCost(currentModel, usage);
+      const cost = estimateUsageCost(currentModel, usage, observedAt);
       const eventKey = crypto
         .createHash('sha1')
         .update(`${sourceFile}:${lineNumber}:${observedAt}`)
@@ -514,7 +489,7 @@ export async function scanCodexSessions(): Promise<{
   const codexHome = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
   const roots = [path.join(codexHome, 'sessions'), path.join(codexHome, 'archived_sessions')];
   const files = (await Promise.all(roots.map(listJsonlFiles))).flat();
-  const parserVersion = '2';
+  const parserVersion = '4';
   const markerPath = path.resolve(process.cwd(), 'data', '.session-parser-version');
   const installedVersion = fs.existsSync(markerPath)
     ? (await fs.promises.readFile(markerPath, 'utf8')).trim()

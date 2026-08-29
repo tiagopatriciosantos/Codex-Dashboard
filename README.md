@@ -8,12 +8,15 @@ The dashboard runs entirely on your computer. It starts `codex app-server`, read
 
 - Current 5-hour usage, reset time, recent burn rate, and projected usage at reset.
 - Current 7-day usage, reset time, recent burn rate, and projected usage at reset.
+- Over-limit reporting that preserves percentages above 100% instead of clipping them.
+- Reset-aware projections that restart the trend after an unexpected downward quota change.
 - Graceful handling when Codex does not report a 5-hour window. The card shows **Not reported** while older history remains stored.
 - Graphs for the active 5-hour and 7-day quota windows.
 - Daily token activity for the last seven days.
 - Per-thread model, total tokens, cached/uncached input, output, reasoning output, and estimated API-equivalent cost.
-- Estimated 5-hour and 7-day quota consumed by each thread, based on overlapping quota and token snapshots.
-- User-facing Codex thread names when App Server reports them, with the first cleaned prompt as a fallback.
+- Estimated 5-hour and 7-day quota consumed by each thread, based on timestamp-bracketed task runs.
+- User-facing Codex chat names read directly from the local desktop state, with App Server metadata and the first cleaned prompt used only as fallbacks.
+- Search, over-limit filtering, sorting, persistent section navigation, and a responsive mobile worklist.
 - Expandable thread details with prompt-level token use, timing, first-token latency, cache use, model, and estimated cost.
 - Separate model graphs for total tokens and API-equivalent cost.
 - Total indexed tokens and total API-equivalent cost.
@@ -169,6 +172,7 @@ For each active quota window, the backend fits a linear trend to recent local sn
 - confidence based on the number and time span of collected samples
 
 The projection is an estimate. The reported `usedPercent` and `resetsAt` values remain the authoritative values.
+If reported usage drops unexpectedly inside the same nominal window, the dashboard treats that point as a reset boundary and fits only the continuous samples after it. Raw values above 100% remain intact in storage, charts, and projections.
 
 ### Thread tokens and models
 
@@ -189,7 +193,7 @@ The parser can recover prior usage only when the corresponding local session fil
 
 ### Per-thread usage and prompt metrics
 
-Codex does not directly provide an exact “this thread used X% of the quota” value. The dashboard estimates thread-level 5-hour and 7-day usage by comparing adjacent quota snapshots and assigning each positive percentage change to token events observed in the same interval. API-equivalent cost is used as the weighting when available, with token count as the fallback.
+Codex does not directly provide an exact “this thread used X% of the quota” value. The dashboard estimates thread-level 5-hour and 7-day usage from completed task timestamps. For each run, it takes the quota sample at or before the start and the sample at or after completion, then subtracts the two percentages. Separate runs of a long-lived thread are calculated independently, so quota changes during idle gaps are not attributed to that thread. When coarse polling brackets multiple sequential tasks, the observed change is divided by active run time to avoid double-counting. A downward quota change splits attribution into separate reset segments; estimates remain blank unless every completed run is fully bracketed by reliable samples.
 
 Expanded thread rows show prompt segments recovered from local logs. Timing is labeled by quality:
 
@@ -213,25 +217,26 @@ The calculator separates:
 - cached input tokens
 - output tokens
 
-For supported long-context models, a request whose input exceeds the configured threshold uses the configured long-context multiplier. Prices and aliases are stored in `config/pricing.json` so they can be updated without changing the application code.
+For supported long-context models, a request whose input exceeds the configured threshold uses the configured long-context multiplier. Prices, aliases, and historical rate changes are stored in `config/pricing.json` so they can be updated without changing the application code. Historical session costs are calculated using the rate effective when each token event was recorded.
 
 `reasoningOutputTokens` is displayed separately when available, but is not added again to cost if it is already included in output-token accounting.
 
 ### Minutes per 1% by model
 
-Codex does not directly attribute account quota percentage to individual models. The dashboard estimates this metric by correlating:
+Codex does not directly attribute account quota percentage to individual models. The dashboard estimates this metric from the 30 most recently completed chats by correlating:
 
-1. changes between adjacent quota snapshots, and
-2. locally observed token events during the same interval.
+1. each completed task's start and completion timestamps,
+2. the quota values immediately bracketing that task, and
+3. the task's primary model and actual active duration.
 
-When multiple models were active in one interval, the quota change is divided using estimated API cost as the weight, falling back to token count when cost is unavailable. Treat this graph as comparative rather than exact. It improves after the dashboard has run through several usage intervals.
+The chart reports actual task minutes per estimated 1% of quota; a higher value means the model sustained more active work per percentage point. When coarse polling brackets multiple sequential tasks, the quota change is divided by their active durations so it is not counted twice. Treat this graph as comparative rather than exact.
 
 ## Accuracy limits
 
 - Historical quota points can be recovered from older rollout logs when those logs contain rate-limit snapshots. Gaps that were never logged cannot be reconstructed.
 - `account/usage/read` may provide older daily token buckets, depending on the account and authentication mode.
 - A separate dashboard does not automatically receive every live per-thread event from another Codex client, so local session logs are used for thread and prompt accounting.
-- Thread-level quota percentages and per-prompt token attribution are estimates, not values directly reported by Codex.
+- Thread-level quota percentages are timestamp-based estimates, not values directly reported by Codex.
 - User-facing thread names depend on App Server metadata. A prompt-derived fallback is shown when no persisted name is returned.
 - Token totals do not convert directly into ChatGPT quota percentage. Model, caching, reasoning, tools, images, and Codex service accounting can affect quota use.
 - API-equivalent prices can become outdated. Review `config/pricing.json` after model or pricing changes.
