@@ -1,7 +1,15 @@
 {
-  "updatedAt": "2026-07-30",
+  "updatedAt": "2026-09-05",
   "currency": "USD",
   "models": [
+    {
+      "id": "gpt-6-astra",
+      "aliases": ["gpt-6-astra"],
+      "inputPerMillion": 10,
+      "cachedInputPerMillion": 1,
+      "outputPerMillion": 50,
+      "longContext": { "thresholdTokens": 272000, "inputMultiplier": 2, "outputMultiplier": 1.5 }
+    },
     {
       "id": "gpt-5.6-sol",
       "aliases": ["gpt-5.6", "gpt-5.6-sol"],
