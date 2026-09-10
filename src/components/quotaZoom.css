@@ -1,0 +1,13 @@
+.qz-tools, .qz-options, .qz-presets { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.qz-tools, .qz-options { padding:6px 18px; }
+.qz-tools button { display:inline-flex; align-items:center; gap:6px; padding:7px 10px; border:1px solid var(--border-strong); border-radius:6px; background:var(--surface-soft); color:var(--text-secondary); cursor:pointer; font-size:12px; }
+.qz-tools button:hover, .qz-tools button[aria-pressed="true"] { color:var(--text-primary); border-color:var(--chart-primary); }
+.qz-tools button:focus-visible, .qz-options input:focus-visible { outline:2px solid var(--chart-primary); outline-offset:2px; }
+.qz-options { color:var(--text-secondary); font-size:11px; gap:16px; }
+.qz-options label { display:inline-flex; align-items:center; gap:5px; }
+.qz-plot { height:320px; width:100%; }
+.qz-note { margin:4px 18px 10px; color:var(--text-muted); font-size:11px; line-height:1.5; }
+.qz-dialog { width:94vw; max-width:1700px; max-height:94vh; padding:6px; border:1px solid var(--border-strong); border-radius:12px; background:var(--surface); color:var(--text-primary); overflow:auto; }
+.qz-dialog::backdrop { background:rgb(0 0 0 / 75%); }
+.qz-dialog .qz-plot { height:clamp(260px, 62vh, 850px); }
+@media(max-width:600px) { .qz-plot { height:290px; } .qz-dialog { width:98vw; } .qz-tools { gap:5px; } }

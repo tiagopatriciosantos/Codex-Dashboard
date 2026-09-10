@@ -1,17 +1,13 @@
 name: Dashboard CI
-
 on:
   push:
   pull_request:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
   group: dashboard-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
   validate:
     strategy:
@@ -22,37 +18,23 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-      - name: Install locked dependencies
-        run: npm ci
-      - name: Type check
-        id: types
-        continue-on-error: true
-        run: npm run typecheck
-      - name: Unit tests
-        id: tests
-        continue-on-error: true
-        run: npm test
-      - name: Production build
-        id: build
-        continue-on-error: true
-        run: npm run build
-      - name: Audit dependencies
-        id: audit
-        continue-on-error: true
-        run: npm audit --audit-level=high
-      - name: Enforce checks
-        if: always()
-        shell: bash
-        env:
-          TYPES: ${{ steps.types.outcome }}
-          TESTS: ${{ steps.tests.outcome }}
-          BUILD: ${{ steps.build.outcome }}
-          AUDIT: ${{ steps.audit.outcome }}
-        run: |
-          for result in "$TYPES" "$TESTS" "$BUILD" "$AUDIT"; do
-            test "$result" = success || exit 1
-          done
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm run smoke
+      - run: npm audit --audit-level=high
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux' && success()
+        with:
+          name: dashboard-preview
+          retention-days: 3
+          path: |
+            dist/
+            demo-overview.json
