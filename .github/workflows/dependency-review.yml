@@ -1,0 +1,39 @@
+name: Prepare dependency update
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/dependency-review.yml']
+permissions:
+  contents: read
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Archive public source for review
+        run: git archive --format=tar HEAD > source.tar
+      - name: Resolve compatible security fixes, without install scripts
+        run: |
+          npm audit --json > audit-before.json || true
+          npm audit fix --package-lock-only --ignore-scripts
+          npm audit --json > audit-after.json
+          git diff -- package-lock.json > dependency-update.patch
+          cat dependency-update.patch
+      - name: Upload review bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-review
+          retention-days: 3
+          path: |
+            source.tar
+            package-lock.json
+            audit-before.json
+            audit-after.json
+            dependency-update.patch
