@@ -1,3 +1,4 @@
+export { RateLimitChart } from './QuotaZoomChart';
 import type { ReactNode } from 'react';
 import {
   Area,
@@ -81,7 +82,7 @@ function buildTrendData(points: ProjectionPoint[]): TrendRow[] {
   }));
 }
 
-export function RateLimitChart({
+function LegacyRateLimitChart({
   title,
   subtitle,
   points,

@@ -91,7 +91,7 @@ export function calculateProjection(
   const recent = active.points.filter((point) => point.observedAt >= now - recentWindow);
   const fitPoints = recent.length >= 2 ? recent : active.points;
   const fit = regression(fitPoints);
-  if (!fit || fit.spanSeconds < 5 * 60) {
+  if (!fit || fit.spanSeconds < 5 * 60 || fitPoints.length < 3 || current.resetsAt <= now || now - current.observedAt > 300) {
     return {
       ...EMPTY_PROJECTION,
       samplesUsed: fitPoints.length,
@@ -118,9 +118,9 @@ export function calculateProjection(
         : 'low';
 
   return {
-    projectedPercentAtReset: Math.max(0, projected),
+    projectedPercentAtReset: confidence === 'low' ? null : Math.max(0, projected),
     projectedExhaustionAt:
-      projectedExhaustionAt && projectedExhaustionAt <= current.resetsAt
+      confidence !== 'low' && projectedExhaustionAt && projectedExhaustionAt <= current.resetsAt
         ? projectedExhaustionAt
         : null,
     percentPerHour: fit.slopePerSecond * 3600,
