@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently -n server,web -c blue,green \"tsx watch server/index.ts\" \"vite\"",
-    "build": "tsc -p tsconfig.server.json && vite build",
+    "build": "npm run typecheck && tsc -p tsconfig.server.json && vite build",
     "start": "node dist-server/index.js",
-    "test": "tsx --test server/tests.ts",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit"
+    "test": "node scripts/run-tests.mjs",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
+    "smoke": "node scripts/smoke-test.mjs"
   },
   "dependencies": {
     "dotenv": "^17.2.2",
@@ -31,6 +32,6 @@
   },
   "description": "Local dashboard for Codex quota windows, token history, API-equivalent cost, and model efficiency.",
   "engines": {
-    "node": ">=22.5.0"
+    "node": ">=22.13.0"
   }
 }

@@ -2,6 +2,7 @@ import 'dotenv/config';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
+import { localApiOnly } from './localSecurity.js';
 import { AppServerClient } from './codex/AppServerClient.js';
 import { readLocalThreadMetadata } from './codex/localThreadMetadata.js';
 import {
@@ -32,9 +33,12 @@ import { scanCodexSessions } from './sessionLogs.js';
 import type { DashboardOverview, RateLimitWindow } from './types.js';
 
 const app = express();
-app.use(express.json());
+app.disable('x-powered-by');
 
 const port = Number(process.env.PORT || 8787);
+if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid PORT');
+app.use('/api', localApiOnly(port));
+app.use(express.json({ limit: '16kb' }));
 const demoMode = process.env.DEMO_MODE === 'true';
 const rateLimitPollMs = Number(process.env.RATE_LIMIT_POLL_MS || 60_000);
 const accountUsagePollMs = Number(process.env.ACCOUNT_USAGE_POLL_MS || 900_000);
@@ -151,10 +155,8 @@ async function refreshCodexData(forceAccountUsage = false): Promise<void> {
 
       const rateResult = await codex.request('account/rateLimits/read');
       const normalized = normalizeRateLimits(rateResult);
-      if (normalized.length > 0) {
-        limits = normalized;
-        for (const limit of normalized) insertRateLimitSnapshot(limit);
-      }
+      limits = normalized; // Missing windows are not current readings. Historical snapshots stay in SQLite.
+      for (const limit of normalized) insertRateLimitSnapshot(limit);
       connectionError = null;
 
       const now = Date.now();
@@ -330,15 +332,15 @@ app.use((request, response, next) => {
   response.sendFile(path.join(clientDist, 'index.html'));
 });
 
-app.listen(port, () => {
+app.listen(port, '127.0.0.1', () => {
   console.log(`Codex Usage Dashboard server: http://localhost:${port}`);
   if (demoMode) console.log('DEMO_MODE is enabled.');
 });
 
 void refreshCodexData(true);
-void refreshSessions();
+void refreshSessions().catch(error => console.warn('Session scan failed:', error.message));
 setInterval(() => void refreshCodexData(false), rateLimitPollMs).unref();
-setInterval(() => void refreshSessions(), sessionScanMs).unref();
+setInterval(() => void refreshSessions().catch(error => console.warn('Session scan failed:', error.message)), sessionScanMs).unref();
 
 process.on('SIGINT', () => {
   codex.stop();

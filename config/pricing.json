@@ -1,5 +1,8 @@
 {
   "updatedAt": "2026-09-05",
+  "verifiedAt": "2026-09-10",
+  "sources": ["https://developers.openai.com/api/docs/models/gpt-6-astra"],
+  "estimateBasis": "Standard API text-token equivalent. Excludes cache writes, tools, Fast mode. Not Codex subscription metering.",
   "currency": "USD",
   "models": [
     {

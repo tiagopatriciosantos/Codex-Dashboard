@@ -16,7 +16,7 @@ import type {
   TokenUsage
 } from './types.js';
 
-const dataDir = path.resolve(process.cwd(), 'data');
+const dataDir = path.resolve(process.env.CODEX_DASHBOARD_DATA_DIR || path.join(process.cwd(), 'data'));
 fs.mkdirSync(dataDir, { recursive: true });
 const db = new DatabaseSync(path.join(dataDir, 'codex-usage.sqlite'));
 db.exec('PRAGMA busy_timeout = 5000;');

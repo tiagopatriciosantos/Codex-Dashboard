@@ -353,7 +353,7 @@ export async function parseSessionFile(sourceFile: string): Promise<ParsedSessio
     if (rawUserMessage) {
       const cleaned = cleanUserMessage(rawUserMessage);
       if (cleaned) {
-        const dedupeKey = cleaned.toLowerCase();
+        const dedupeKey = `${currentTurnId ?? ''}:${timestamp ?? lineNumber}:${rawUserMessage}`;
         if (!seenUserMessages.has(dedupeKey) && partKind === 'main') {
           seenUserMessages.add(dedupeKey);
           finalizePrompt(timestamp);
@@ -395,10 +395,13 @@ export async function parseSessionFile(sourceFile: string): Promise<ParsedSessio
       if (model.toLowerCase() === 'codex-auto-review') partKind = 'reviewer';
     }
 
+    if (timestamp !== null) {
+      for (const limit of extractRateLimitWindows(record, timestamp)) insertRateLimitSnapshot(limit);
+    }
     const usage = findIncrementalUsage(record);
     if (usage) {
       const observedAt = timestamp ?? updatedAt ?? Math.floor(Date.now() / 1000);
-      for (const limit of extractRateLimitWindows(record, observedAt)) insertRateLimitSnapshot(limit);
+      // Rate-limit-only events were already indexed independently above.
       const cost = estimateUsageCost(currentModel, usage, observedAt);
       const eventKey = crypto
         .createHash('sha1')
@@ -447,7 +450,7 @@ export async function parseSessionFile(sourceFile: string): Promise<ParsedSessio
     }
   }
 
-  finalizePrompt(updatedAt);
+  finalizePrompt(null); // An unfinished turn is not a completed task run.
   if (events.length === 0 && prompts.length === 0) return null;
   const fallbackId = crypto.createHash('sha1').update(sourceFile).digest('hex');
   const finalThreadId = threadId ?? fallbackId;
@@ -489,8 +492,8 @@ export async function scanCodexSessions(): Promise<{
   const codexHome = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
   const roots = [path.join(codexHome, 'sessions'), path.join(codexHome, 'archived_sessions')];
   const files = (await Promise.all(roots.map(listJsonlFiles))).flat();
-  const parserVersion = '4';
-  const markerPath = path.resolve(process.cwd(), 'data', '.session-parser-version');
+  const parserVersion = '5';
+  const markerPath = path.resolve(process.env.CODEX_DASHBOARD_DATA_DIR || path.join(process.cwd(), 'data'), '.session-parser-version');
   const installedVersion = fs.existsSync(markerPath)
     ? (await fs.promises.readFile(markerPath, 'utf8')).trim()
     : '';

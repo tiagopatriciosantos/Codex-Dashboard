@@ -78,7 +78,7 @@ export function findPricing(model: string): ModelPricing | null {
   // Snapshot model IDs usually append a date. Match the longest alias prefix.
   const candidates = config.models
     .flatMap((entry) => [entry.id, ...entry.aliases].map((alias) => ({ entry, alias })))
-    .filter(({ alias }) => normalized.startsWith(`${normalizeModelName(alias)}-`))
+    .filter(({ alias }) => normalized.startsWith(`${normalizeModelName(alias)}-`) && /^\d{4}-\d{2}-\d{2}$/.test(normalized.slice(alias.length + 1)))
     .sort((a, b) => b.alias.length - a.alias.length);
   return candidates[0]?.entry ?? null;
 }
