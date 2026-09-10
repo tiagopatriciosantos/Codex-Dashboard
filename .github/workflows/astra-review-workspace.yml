@@ -1,0 +1,30 @@
+name: Astra review workspace
+on:
+  push:
+    branches: [fix/astra-quota-compatibility]
+    paths: [.github/workflows/astra-review-workspace.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - name: Archive tracked source and installed public dependencies (no credentials or local data)
+        run: |
+          git archive HEAD > source.tar
+          tar -czf dependencies.tar.gz node_modules
+      - uses: actions/upload-artifact@v4
+        with:
+          name: astra-review-workspace
+          retention-days: 1
+          path: |
+            source.tar
+            dependencies.tar.gz
