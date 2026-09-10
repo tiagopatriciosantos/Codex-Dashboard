@@ -38,8 +38,8 @@ jobs:
             dist/
             demo-overview.json
             audit-verified.json
-      - name: Commit only reviewed source changes, then remove one-time apply workflow
+      - name: Commit only reviewed source changes
         run: |
-          git rm .github/stabilization.patch .github/workflows/apply-stabilization.yml
+          git rm -f .github/stabilization.patch
           git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix: apply tested source fixes and reviewed dependency lockfile'
           git push origin HEAD:fix/stabilize-dashboard-zoom

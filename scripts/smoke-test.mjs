@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { request as httpRequest } from 'node:http';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -25,7 +26,12 @@ try {
   assert.match(html, /<div id="root">/);
   for (const asset of html.matchAll(/(?:src|href)="(\/assets\/[^\"]+)"/g)) assert.equal((await fetch(url + asset[1])).status, 200);
   assert.equal((await fetch(`${url}/api/refresh`, { method: 'POST', headers: { Origin: 'https://untrusted.example' } })).status, 403);
-  assert.equal((await fetch(`${url}/api/overview`, { headers: { Host: 'rebinding.example' } })).status, 403);
+  // Use the raw HTTP client: fetch may normalize/ignore an overridden Host.
+  const rebound = await new Promise((resolve, reject) => {
+    const req = httpRequest(`${url}/api/overview`, { headers: { Host: 'rebinding.example' } }, res => { res.resume(); resolve(res.statusCode); });
+    req.on('error', reject); req.end();
+  });
+  assert.equal(rebound, 403);
   assert.equal((await fetch(`${url}/api/refresh`, { method: 'POST', headers: { Origin: url } })).status, 200);
   console.log('Demo smoke passed: health, overview, assets, same-origin refresh, CSRF/rebinding rejection.');
 } finally { child.kill(); await exited; rmSync(temp, { recursive:true, force:true }); }
